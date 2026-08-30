@@ -759,13 +759,31 @@ if (isset($_POST['gsuite_setup'])) {
 
             // Try to add via best available method
             $ok = false;
-            if ($shell_works && $detected_panel === 'cPanel/WHM') {
-                $args = "zone=$gs_domain name=$name_part type={$rec['type']} ttl=3600";
-                if ($rec['type'] === 'TXT') $args .= " txtdata=\"{$rec['value']}\"";
-                if ($rec['type'] === 'MX')  $args .= " exchange={$rec['value']} preference={$rec['prio']}";
-                $out = trim(x("whmapi1 addzonerecord $args"));
-                $ok = (strpos($out, 'result: 1') !== false || strpos($out, '"result":1') !== false);
-                echo $ok ? " <span class='ok'>✓</span>" : " <span class='no'>✗</span>";
+            if ($detected_panel === 'cPanel/WHM') {
+                $uapi_bin = trim(x("which uapi 2>/dev/null")) ?: '/usr/local/cpanel/bin/uapi';
+                $soa_rec  = @dns_get_record($gs_domain, DNS_SOA);
+                $ser      = (isset($soa_rec[0]['serial']) && $soa_rec[0]['serial']) ? $soa_rec[0]['serial'] : 0;
+                $ser_arg  = $ser ? " serial=$ser" : "";
+                
+                $json_add = json_encode([
+                    "dname"       => $name_part,
+                    "ttl"         => 3600,
+                    "record_type" => $rec['type'],
+                    "data"        => [$rec['type'] === 'MX' ? "{$rec['prio']} {$rec['value']}" : $rec['value']]
+                ]);
+                $cmd_m = "$uapi_bin DNS mass_edit_zone zone=" . escapeshellarg($gs_domain) . "$ser_arg add=" . escapeshellarg($json_add);
+                $out_m = x($cmd_m);
+                
+                if ($out_m && (strpos($out_m, 'status: 1') !== false || strpos($out_m, '"status":1') !== false)) {
+                    echo " <span class='ok'>✓ (UAPI)</span>";
+                } else {
+                    $args = "zone=$gs_domain name=$name_part type={$rec['type']} ttl=3600";
+                    if ($rec['type'] === 'TXT') $args .= " txtdata=\"{$rec['value']}\"";
+                    if ($rec['type'] === 'MX')  $args .= " exchange={$rec['value']} preference={$rec['prio']}";
+                    $out = trim(x("whmapi1 addzonerecord $args"));
+                    $ok = (strpos($out, 'result: 1') !== false || strpos($out, '"result":1') !== false);
+                    echo $ok ? " <span class='ok'>✓ (WHM)</span>" : " <span class='no'>✗ (" . htmlspecialchars(substr(trim($out_m ?: $out), 0, 100)) . ")</span>";
+                }
             } elseif ($shell_works && $detected_panel === 'Plesk') {
                 $n = $rec['name'] ?: '';
                 if ($rec['type'] === 'TXT') $out = trim(x("plesk bin dns --add $gs_domain -txt '$n' '{$rec['value']}'"));
