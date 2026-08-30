@@ -763,7 +763,12 @@ if (isset($_POST['gsuite_setup'])) {
                 $uapi_bin = trim(x("which uapi 2>/dev/null")) ?: '/usr/local/cpanel/bin/uapi';
                 $soa_rec  = @dns_get_record($gs_domain, DNS_SOA);
                 $ser      = (isset($soa_rec[0]['serial']) && $soa_rec[0]['serial']) ? $soa_rec[0]['serial'] : 0;
-                $ser_arg  = $ser ? " serial=$ser" : "";
+                if (!$ser) {
+                    $pz = x("$uapi_bin DNS parse_zone zone=" . escapeshellarg($gs_domain));
+                    if ($pz && preg_match('/"serial":\s*(\d+)/i', $pz, $ms)) $ser = $ms[1];
+                    elseif ($pz && preg_match('/serial:\s*(\d+)/i', $pz, $ms)) $ser = $ms[1];
+                }
+                $ser_arg = $ser ? " serial=$ser" : "";
                 
                 $json_add = json_encode([
                     "dname"       => $name_part,
@@ -777,12 +782,16 @@ if (isset($_POST['gsuite_setup'])) {
                 if ($out_m && (strpos($out_m, 'status: 1') !== false || strpos($out_m, '"status":1') !== false)) {
                     echo " <span class='ok'>✓ (UAPI)</span>";
                 } else {
-                    $args = "zone=$gs_domain name=$name_part type={$rec['type']} ttl=3600";
-                    if ($rec['type'] === 'TXT') $args .= " txtdata=\"{$rec['value']}\"";
-                    if ($rec['type'] === 'MX')  $args .= " exchange={$rec['value']} preference={$rec['prio']}";
-                    $out = trim(x("whmapi1 addzonerecord $args"));
-                    $ok = (strpos($out, 'result: 1') !== false || strpos($out, '"result":1') !== false);
-                    echo $ok ? " <span class='ok'>✓ (WHM)</span>" : " <span class='no'>✗ (" . htmlspecialchars(substr(trim($out_m ?: $out), 0, 100)) . ")</span>";
+                    // Extract error message from uapi output
+                    $err_msg = 'Failed';
+                    if ($out_m && preg_match('/errors:\s*\n\s*-\s*([^\n]+)/i', $out_m, $em)) {
+                        $err_msg = trim($em[1]);
+                    } elseif ($out_m && preg_match('/"errors":\["([^"]+)"\]/i', $out_m, $em)) {
+                        $err_msg = trim($em[1]);
+                    } elseif (empty($ser)) {
+                        $err_msg = 'SOA serial missing';
+                    }
+                    echo " <span class='no'>✗ (" . htmlspecialchars($err_msg) . ")</span>";
                 }
             } elseif ($shell_works && $detected_panel === 'Plesk') {
                 $n = $rec['name'] ?: '';
